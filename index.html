@@ -80,6 +80,18 @@ p{margin:0}
 .sets{display:flex;gap:8px;flex-wrap:wrap}
 .set{width:44px;height:44px;border-radius:50%;border:2px solid var(--line);background:transparent;font-weight:700;cursor:pointer}
 .set.done{background:var(--good);border-color:var(--good);color:#06180f}
+.rep{width:56px!important;height:48px;text-align:center;font-family:var(--display);font-size:22px;font-weight:700;border-radius:12px!important;padding:4px!important}
+.rep.done{background:var(--good)!important;border-color:var(--good)!important;color:#06180f}
+.rep::placeholder{color:var(--muted);opacity:.6}
+.load{flex:1 1 100%}
+.tag.up{background:#123826;color:var(--good)}
+.photos{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.photos figure{margin:0;display:flex;flex-direction:column;gap:4px}
+.photos img{width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:12px;background:var(--surface-2)}
+.photos figcaption{font-size:13px;color:var(--muted)}
+select{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:8px}
+.star{appearance:none;border:0;background:transparent;font-size:22px;color:var(--muted);cursor:pointer;width:36px;height:40px;flex:none}
+.star.on{color:var(--accent)}
 .daypick{display:flex;gap:6px;overflow-x:auto;padding-bottom:2px}
 .daypick .chip{white-space:nowrap}
 .list{display:flex;flex-direction:column;gap:8px}
@@ -260,10 +272,12 @@ const TIPS = [
 
 /* ---------------- STATE ---------------- */
 const KEY = "cutcoach.v1";
-const DEF = () => ({v:1, updatedAt:0, settings:{why:"", kcal:2200, protein:160, start:88, goal:78}, days:{}, weights:[], temptations:[]});
+const DEF = () => ({v:1, updatedAt:0, settings:{why:"", kcal:2200, protein:160, start:88, goal:78}, days:{}, weights:[], temptations:[],
+  exlog:{}, waists:[], favs:[], myFoods:[], foodUse:{}, adjust:{}, lastBackup:0});
 let S = DEF();
 try{ const raw = localStorage.getItem(KEY); if(raw){ S = Object.assign(DEF(), JSON.parse(raw)); } }catch(e){}
 S.settings = Object.assign(DEF().settings, S.settings||{});
+let yourFoods = [];
 let tab = "today", wkSel = null, sos = {step:0}, coachText = "", coachBusy = false;
 let syncMsg = "Saved on this phone";
 const IN_CLAUDE = /claude\.ai|claudeusercontent/.test(location.hostname);
@@ -349,6 +363,12 @@ function viewToday(){
 
   h += `<button class="sosbig" type="button" data-act="go" data-v="sos"><div><b>I'm tempted</b><span>Tap before you eat it. Takes 1 minute.</span></div><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></button>`;
 
+  if(new Date().getDay()===0) h += reviewCard();
+  const usedDays = Object.keys(S.days).length;
+  if(!IN_CLAUDE && usedDays>=3 && Date.now()-(S.lastBackup||0) > 7*864e5){
+    h += `<section class="card"><div class="row between"><div><h3>Back up your data</h3><p class="small muted">${S.lastBackup?"Last backup over a week ago.":"You haven't backed up yet."} It takes 5 seconds.</p></div><button class="btn primary" type="button" data-act="backupfile">Back up</button></div></section>`;
+  }
+
   const wdone = d.wk.done;
   h += `<section class="card ${wdone?"":"hl"}"><div class="row between"><div><div class="eyebrow">Today's training</div><h2>${esc(W.title)}</h2></div>${wdone?'<span class="ok"><b>Done</b></span>':""}</div>
     <p class="muted small">${type==="REST"?"Rest day from strength. Walk and stretch.":W.ex.length+" exercises · about 30 min"} · ${esc(W.cardio)}</p>
@@ -421,10 +441,22 @@ function viewWorkout(){
   h += `<section class="card"><p>${type==="QUICK"?"Do the 5 exercises back to back, rest 60 s, repeat 3 rounds.":type==="REST"?"Walk 40–60 minutes today. Then this 5-minute stretch.":"Warm up 5 min: march in place, arm circles, 10 slow squats, 10 hip hinges, 10 cat-cows. Rest 60–90 s between sets."}</p>
     <p class="small muted">Cardio: ${esc(W.cardio)}. Exercises marked <span class="tag">BACK</span> are easy on load: technique first, stop on pain.</p></section>`;
   h += `<section class="card">`+W.ex.map((e,i)=>{
-    const sets = Array.from({length:e.s},(_,j)=>{ const on = wk.sets && wk.sets[i+"-"+j]; return `<button type="button" class="set ${on?"done":""}" data-act="set" data-v="${type}|${i}|${j}" aria-label="Set ${j+1}${on?" done":""}">${j+1}</button>`; }).join("");
+    let sets;
+    if(type==="REST"){
+      sets = Array.from({length:e.s},(_,j)=>{ const on = wk.sets && wk.sets[i+"-"+j]; return `<button type="button" class="set ${on?"done":""}" data-act="set" data-v="${type}|${i}|${j}" aria-label="Done${on?", ticked":""}">✓</button>`; }).join("");
+    } else {
+      const lg = (wk.log && wk.log[i]) || {reps:[], load:""};
+      const last = lastLog(e.n);
+      sets = Array.from({length:e.s},(_,j)=>{ const v = lg.reps[j]||""; const ph = last && last.reps[j] ? last.reps[j] : topReps(e.r);
+        return `<input class="rep ${v?"done":""}" type="number" inputmode="numeric" min="0" max="300" id="rep-${i}-${j}" value="${v}" placeholder="${ph}" data-in="rep" data-v="${type}|${i}|${j}" aria-label="Set ${j+1} reps">`; }).join("");
+      sets += `<input class="load" type="text" id="load-${i}" value="${esc(lg.load||"")}" placeholder="${esc(last&&last.load?last.load:"Load, e.g. backpack + 4 books")}" data-in="load" data-v="${type}|${i}" aria-label="Load used">`;
+      const harder = last && last.reps.length>=e.s && last.reps.slice(0,e.s).every(x=>x>=topReps(e.r));
+      var lastLine = last ? `<p class="small muted">Last time (${esc(last.d.slice(5))}): ${last.reps.filter(Boolean).join(", ")}${last.load?" · "+esc(last.load):""} ${harder?'<span class="tag up">MAKE IT HARDER</span>':""}</p>${isToday?`<button class="btn ghost small" type="button" data-act="samelast" data-v="${type}|${i}">Same as last time</button>`:""}` : "";
+    }
     return `<div class="ex"><div class="row between"><h3>${esc(e.n)}</h3><span class="num">${e.s} × ${esc(e.r)}</span></div>
       ${e.gym?`<span class="gym">Replaces: ${esc(e.gym)}</span>`:""}
       <p class="small">${esc(e.how)} ${e.back?'<span class="tag">BACK</span>':""}</p>
+      ${type!=="REST" && typeof lastLine!=="undefined" ? lastLine : ""}
       ${isToday?`<div class="sets">${sets}</div>`:""}</div>`;
   }).join("")+`</section>`;
   if(isToday){
@@ -434,7 +466,7 @@ function viewWorkout(){
     h += `<p class="small muted">This is ${esc(W.day)}'s workout. You can tick sets on the day it's scheduled, or do the 15-minute one today.</p>`;
   }
   h += `<section class="card"><h3>How to progress</h3><ul class="clean small">
-    <li>When you hit the top of the rep range on every set, make it harder: add a book to the backpack, lower slower (3 s), or use the harder version.</li>
+    <li>Type the reps you did in each box. When you hit the top of the range on every set, the app shows MAKE IT HARDER next time: add a book to the backpack, lower slower (3 s), or use the harder version.</li>
     <li>For <span class="tag">BACK</span> exercises add reps first and weight later, very gradually.</li>
     <li>Every 5th week, do 2 sets instead of 3 (an easy week).</li></ul></section>`;
   return h;
@@ -495,7 +527,16 @@ function viewFood(){
     <p class="small muted">${st.kcal-t.k>=0?(st.kcal-t.k)+" kcal and "+Math.max(0,st.protein-t.p)+" g protein left today.":"Over by "+(t.k-st.kcal)+" kcal. Next meal normal, no skipping."}</p>
     ${d.food.length?`<div class="list">${d.food.map((f,i)=>`<div class="item"><div class="t"><span>${esc(f.n)}</span><small>${f.k} kcal · ${f.p} g protein</small></div><button class="del" type="button" data-act="fdel" data-v="${i}" aria-label="Remove">×</button></div>`).join("")}</div>`:""}</section>`;
 
-  h += `<section class="card"><h3>Quick add</h3><div class="list">${FOODS.map((f,i)=>`<div class="item"><div class="t"><span>${esc(f[0])}</span><small>${f[1]} kcal · ${f[2]} g protein</small></div><button class="add" type="button" data-act="fadd" data-v="${i}" aria-label="Add ${esc(f[0])}">+</button></div>`).join("")}</div>
+  const favs = S.favs.map(foodInfo).filter(Boolean);
+  const recent = Object.keys(S.foodUse).filter(n=>!S.favs.includes(n)).sort((a,b)=>S.foodUse[b].t-S.foodUse[a].t).slice(0,8).map(foodInfo).filter(Boolean);
+  const mine = S.myFoods.filter(f=>!S.favs.includes(f.n) && !recent.some(r=>r.n===f.n));
+  yourFoods = [...favs, ...recent, ...mine];
+  const row = (f,i)=>`<div class="item"><button class="star ${S.favs.includes(f.n)?"on":""}" type="button" data-act="fav" data-v="${i}" aria-label="${S.favs.includes(f.n)?"Remove from":"Add to"} favourites">★</button><div class="t" style="flex:1"><span>${esc(f.n)}</span><small>${f.k} kcal · ${f.p} g protein</small></div><button class="add" type="button" data-act="yadd" data-v="${i}" aria-label="Add ${esc(f.n)}">+</button></div>`;
+  h += `<section class="card"><h3>Your foods</h3>${yourFoods.length?`<div class="list">${yourFoods.map(row).join("")}</div>`:'<p class="small muted">Foods you log show up here. Tap ★ to keep one at the top.</p>'}
+    <details><summary>Save a dish of your own</summary><div class="list"><input id="md-n" type="text" placeholder="e.g. Pork with onion and rice"><div class="row"><input id="md-k" type="number" inputmode="numeric" placeholder="kcal" style="flex:1"><input id="md-p" type="number" inputmode="numeric" placeholder="protein g" style="flex:1"></div><button class="btn primary" type="button" data-act="mydish">Save dish</button>
+    ${S.myFoods.length?`<p class="small muted">Your dishes: ${S.myFoods.map((f,i)=>`${esc(f.n)} <button class="del" type="button" data-act="mydel" data-v="${i}" aria-label="Delete ${esc(f.n)}">×</button>`).join(" ")}</p>`:""}</div></details></section>`;
+
+  h += `<section class="card"><h3>Quick add</h3><div class="list">${FOODS.map((f,i)=>`<div class="item"><button class="star ${S.favs.includes(f[0])?"on":""}" type="button" data-act="favq" data-v="${i}" aria-label="Favourite">★</button><div class="t" style="flex:1"><span>${esc(f[0])}</span><small>${f[1]} kcal · ${f[2]} g protein</small></div><button class="add" type="button" data-act="fadd" data-v="${i}" aria-label="Add ${esc(f[0])}">+</button></div>`).join("")}</div>
     <details><summary>Add something else</summary><div class="list"><input id="cf-n" type="text" placeholder="What you ate"><div class="row"><input id="cf-k" type="number" inputmode="numeric" placeholder="kcal" style="flex:1"><input id="cf-p" type="number" inputmode="numeric" placeholder="protein g" style="flex:1"></div><button class="btn primary" type="button" data-act="fcustom">Add</button></div></details></section>`;
 
   h += `<section class="card"><h3>Meal ideas</h3><p class="small muted">Each fits your 2,200 kcal day. Tap + to log it.</p>`+
@@ -535,15 +576,30 @@ function viewProgress(){
     ${chart(ws)}
     <div class="q"><label for="w-in">Log weight (morning, before eating)</label><div class="inline"><input id="w-in" type="number" inputmode="decimal" step="0.1" placeholder="kg"><button class="btn primary" type="button" data-act="wadd">Save</button></div></div></section>`;
 
+  const wz = [...S.waists].sort((a,b)=>a.d.localeCompare(b.d));
+  const w0 = wz[0], wl = wz[wz.length-1];
+  h += `<section class="card"><h3>Waist and photos</h3>
+    <p class="small muted">Measure at your navel, relaxed, every 2 weeks. Photo every 4 weeks: same place, same light, same pose.</p>
+    ${wl?`<p>Waist now <b class="num">${wl.cm} cm</b>${w0!==wl?` · <span class="${wl.cm<w0.cm?"ok":""}">${wl.cm<=w0.cm?"−":"+"}${Math.abs(wl.cm-w0.cm).toFixed(1)} cm</span> since ${esc(w0.d.slice(5))}`:""}</p>`:""}
+    <div class="inline"><input id="waist-in" type="number" inputmode="decimal" step="0.5" placeholder="Waist in cm"><button class="btn primary" type="button" data-act="waistadd">Save</button></div>
+    <label class="btn" for="photo-in" style="text-align:center">Add today's progress photo</label><input id="photo-in" type="file" accept="image/*" data-in="photo" hidden>
+    ${photoList.length?`<div class="row"><select id="cmp-a" data-in="cmp" aria-label="First photo">${photoList.map(k=>`<option ${k===cmpA?"selected":""}>${k}</option>`).join("")}</select><span class="muted">vs</span><select id="cmp-b" data-in="cmp" aria-label="Second photo">${photoList.map(k=>`<option ${k===cmpB?"selected":""}>${k}</option>`).join("")}</select></div>
+      <div class="photos">${[cmpA,cmpB].map(k=>`<figure>${photoUrls[k]?`<img src="${photoUrls[k]}" alt="Progress photo ${k}">`:"<img alt=\"\">"}<figcaption>${k||""}</figcaption></figure>`).join("")}</div>
+      <button class="btn ghost small" type="button" data-act="photodel">Delete the right-hand photo</button>`:'<p class="small muted">Photos stay only on this phone.</p>'}
+  </section>`;
+  h += reviewCard();
+
   const tr = trend();
   let adv;
   if(!tr) adv = `<p class="small muted">Weigh in 3–4 mornings a week. After 2 weeks you'll get advice here on whether to change your calories.</p>`;
   else{
     const r = tr.rate;
     let msg, cls;
-    if(r < 0.3){ msg = "Losing less than 0.3 kg a week. Cut 150–200 kcal (set calories to "+(st.kcal-200)+") or add 2,000 steps a day. Check this for 2 weeks in a row before changing."; cls="warn"; }
+    const adj = S.adjust[weekStart()];
+    if(adj && !adj.undone){ msg = "Calories were already changed this week to "+adj.to+" kcal. Give it 2 weeks before judging again."; cls="ok"; }
+    else if(r < 0.3){ msg = "Losing less than 0.3 kg a week. Add 2,000 steps a day. If it stays like this for 2 weeks in a row, the app lowers your calories by 150 by itself (never below 1,900)."; cls="warn"; }
     else if(r <= 1){ msg = "On track. Keep everything the same."; cls="ok"; }
-    else { msg = "Losing over 1 kg a week. Eat 150–200 kcal more to protect your muscle."; cls="warn"; }
+    else { msg = "Losing over 1 kg a week. If it stays like this for 2 weeks, the app adds 150 kcal by itself to protect your muscle."; cls="warn"; }
     adv = `<p class="small">Last 7 days average <b class="num">${tr.last.toFixed(1)} kg</b>, the week before <b class="num">${tr.prev.toFixed(1)} kg</b>, so <b>${r>=0?"−":"+"}${Math.abs(r).toFixed(2)} kg/week</b>.</p><p class="${cls}">${msg}</p>`;
   }
   h += `<section class="card"><h3>Should you adjust?</h3>${adv}<p class="small muted">Don't go below about 1,900 kcal a day without a doctor or dietitian. Every 10–12 weeks, eat at maintenance (about 2,700) for one week to reset.</p></section>`;
@@ -559,7 +615,10 @@ function viewProgress(){
   h += `<section class="card"><details><summary>Install on your iPhone</summary><ol class="clean small">
     <li>Open alex07cotovici-ctrl.github.io/coach in Safari.</li><li>Tap the Share button, then "Add to Home Screen".</li><li>Open it from the new icon like a normal app.</li></ol>
     <p class="small muted">Your data is saved on this phone. Always open the app from the Home Screen icon so iPhone keeps it, and copy a backup now and then.</p></details>
-    <details><summary>Backup</summary><div class="list"><button class="btn" type="button" data-act="export">Copy backup to clipboard</button>
+    <details ${S.lastBackup?"":"open"}><summary>Backup</summary><div class="list"><p class="small muted">${S.lastBackup?"Last backup: "+new Date(S.lastBackup).toLocaleDateString("en-GB",{day:"numeric",month:"short"}):"No backup yet."} Photos stay on the phone and aren't in the backup.</p>
+    <button class="btn primary" type="button" data-act="backupfile">Save backup file</button>
+    <label class="btn" for="restore-file" style="text-align:center">Restore from a backup file</label><input id="restore-file" type="file" accept=".json,application/json" data-in="restore" hidden>
+    <button class="btn" type="button" data-act="export">Copy backup to clipboard</button>
     <textarea id="imp" placeholder="Paste a backup here to restore it"></textarea><button class="btn" type="button" data-act="import">Restore from pasted backup</button><p class="small" id="bk-msg"></p></div></details></section>`;
   h += `<p class="small muted">Back care: technique before weight, keep your back neutral, stop on pain (not normal muscle tiredness). Have a physio or doctor check the squat, Romanian deadlift and ab exercises.</p>`;
   return h;
@@ -606,10 +665,121 @@ function stopRest(){ clearInterval(restT); document.getElementById("restbar").cl
 let sosT=null;
 function sosTick(){ const el=document.getElementById("sostimer"); if(!el) return; const l=Math.max(0,Math.ceil((sos.until-Date.now())/1000)); el.textContent=pad(Math.floor(l/60))+":"+pad(l%60); }
 
-function addFood(n,k,p){ day().food.push({n,k:Math.round(k),p:Math.round(p)}); save(); }
+function addFood(n,k,p){
+  k=Math.round(k); p=Math.round(p);
+  day().food.push({n,k,p});
+  const u = S.foodUse[n] || {k,p,c:0,t:0}; u.k=k; u.p=p; u.c++; u.t=Date.now(); S.foodUse[n]=u;
+  const names = Object.keys(S.foodUse); if(names.length>80){ names.sort((a,b)=>S.foodUse[a].t-S.foodUse[b].t).slice(0,names.length-80).forEach(x=>{ if(!S.favs.includes(x)) delete S.foodUse[x]; }); }
+  save();
+}
+function foodInfo(n){
+  const my = S.myFoods.find(f=>f.n===n); if(my) return my;
+  const f = FOODS.find(f=>f[0]===n); if(f) return {n,k:f[1],p:f[2]};
+  const u = S.foodUse[n]; return u ? {n,k:u.k,p:u.p} : null;
+}
+
+/* ---- exercise log ---- */
+const topReps = r => { const m = String(r).match(/\d+/g); return m ? +m[m.length-1] : 0; };
+function lastLog(name){
+  const xs = (S.exlog[name]||[]).filter(e=>e.d!==today());
+  return xs.length ? xs[xs.length-1] : null;
+}
+function saveExLog(name, entry){
+  const xs = (S.exlog[name]||[]).filter(e=>e.d!==today());
+  if(entry.reps.some(x=>x>0) || entry.load) xs.push(Object.assign({d:today()}, entry));
+  S.exlog[name] = xs.slice(-20);
+}
+
+/* ---- weekly review + auto adjust ---- */
+function rateAt(offset){ const a=avgBetween(offset+7,offset), b=avgBetween(offset+14,offset+7); return (a==null||b==null)?null:b-a; }
+function weekStart(d=new Date()){ const x=new Date(d); x.setDate(x.getDate()-((x.getDay()+6)%7)); return dkey(x); }
+function weeklyAuto(){
+  const wk = weekStart(); if(S.adjust[wk]) return;
+  const r0 = rateAt(0), r1 = rateAt(7); if(r0==null || r1==null) return;
+  let delta = 0;
+  if(r0<0.3 && r1<0.3) delta = -150; else if(r0>1 && r1>1) delta = 150;
+  if(!delta) return;
+  const before = S.settings.kcal, after = Math.max(1900, Math.min(2700, before+delta));
+  if(after===before) return;
+  S.settings.kcal = after; S.adjust[wk] = {from:before, to:after, rate:+r0.toFixed(2)}; save();
+}
+function weekReview(){
+  const keys = weekKeys().filter(k=>k<=today());
+  const ds = keys.map(k=>S.days[k]).filter(Boolean);
+  const logged = ds.filter(d=>d.food && d.food.length);
+  const avg = (arr)=> arr.length? Math.round(arr.reduce((a,b)=>a+b,0)/arr.length) : null;
+  const rates = ds.map(d=>+d.pm.rate).filter(x=>x>0);
+  const tw = S.temptations.filter(t=>keys.includes(t.d));
+  return {
+    workouts: workoutsThisWeek(),
+    checkins: ds.filter(d=>d.am.done||d.pm.done).length, days: keys.length,
+    kcal: avg(logged.map(d=>d.food.reduce((a,f)=>a+f.k,0))), prot: avg(logged.map(d=>d.food.reduce((a,f)=>a+f.p,0))), logged: logged.length,
+    rate: rates.length ? (rates.reduce((a,b)=>a+b,0)/rates.length).toFixed(1) : null,
+    tempt: tw.length, handled: tw.filter(t=>t.o!=="gave").length,
+    trend: trend(), adj: S.adjust[weekStart()]
+  };
+}
+function reviewCard(){
+  const r = weekReview();
+  const line = (l,v)=>`<tr><td>${l}</td><td class="num">${v}</td></tr>`;
+  let h = `<section class="card hl"><div><div class="eyebrow">Weekly review · week of ${esc(weekStart().slice(5))}</div><h3>How this week went</h3></div><table><tbody>
+    ${line("Workouts", r.workouts+" / 4")}
+    ${line("Check-in days", r.checkins+" / "+r.days)}
+    ${line("Average eating rating", r.rate? r.rate+" / 5":"–")}
+    ${line("Average calories (days logged)", r.kcal? r.kcal+" kcal ("+r.logged+" days)":"–")}
+    ${line("Average protein", r.prot? r.prot+" g":"–")}
+    ${line("Temptations handled", r.handled+" / "+r.tempt)}
+    ${line("Weight trend", r.trend? (r.trend.rate>=0?"−":"+")+Math.abs(r.trend.rate).toFixed(2)+" kg/week":"needs 2 weeks of weigh-ins")}
+  </tbody></table>`;
+  if(r.adj && !r.adj.undone){
+    h += `<p class="warn">Calories changed automatically from ${r.adj.from} to ${r.adj.to} kcal, because your loss was ${r.adj.to<r.adj.from?"under 0.3 kg":"over 1 kg"} a week for 2 weeks in a row.</p><button class="btn" type="button" data-act="undoadj">Undo this change</button>`;
+  }
+  const focus = r.workouts<4 ? "Next week: get all 4 workouts in. Use the 15-minute one on busy days."
+    : (r.prot && r.prot < S.settings.protein-30) ? "Next week: more protein. Add a yogurt or cottage cheese snack every day."
+    : (r.tempt && r.handled/r.tempt < .6) ? "Next week: check the Tempted screen's pattern and plan a snack or walk for that time."
+    : r.checkins < r.days ? "Next week: check in every day. It takes 1 minute."
+    : "Great week. Keep exactly the same plan.";
+  h += `<p><b>${esc(focus)}</b></p></section>`;
+  return h;
+}
+
+/* ---- photos (IndexedDB, stay on this phone) ---- */
+let idb = null;
+function openIdb(){ return new Promise((res,rej)=>{ try{ const q=indexedDB.open("cutcoach-photos",1); q.onupgradeneeded=()=>q.result.createObjectStore("p"); q.onsuccess=()=>res(q.result); q.onerror=()=>rej(q.error);}catch(e){rej(e);} }); }
+async function pStore(mode){ idb = idb || await openIdb(); return idb.transaction("p",mode).objectStore("p"); }
+const reqP = r => new Promise((res,rej)=>{ r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); });
+async function photoPut(d, blob){ const s=await pStore("readwrite"); return reqP(s.put(blob,d)); }
+async function photoGet(d){ const s=await pStore("readonly"); return reqP(s.get(d)); }
+async function photoDel(d){ const s=await pStore("readwrite"); return reqP(s.delete(d)); }
+async function photoKeys(){ try{ const s=await pStore("readonly"); return (await reqP(s.getAllKeys())).sort(); }catch(e){ return []; } }
+function shrink(file){ return new Promise((res,rej)=>{ const img=new Image(); const u=URL.createObjectURL(file); img.onload=()=>{ const m=900, sc=Math.min(1,m/Math.max(img.width,img.height)); const c=document.createElement("canvas"); c.width=Math.round(img.width*sc); c.height=Math.round(img.height*sc); c.getContext("2d").drawImage(img,0,0,c.width,c.height); URL.revokeObjectURL(u); c.toBlob(b=>b?res(b):rej(),"image/jpeg",.82); }; img.onerror=rej; img.src=u; }); }
+let photoList = [], cmpA = null, cmpB = null, photoUrls = {};
+async function refreshPhotos(){
+  photoList = await photoKeys();
+  if(!photoList.includes(cmpA)) cmpA = photoList[0]||null;
+  if(!photoList.includes(cmpB)) cmpB = photoList[photoList.length-1]||null;
+  for(const k of [cmpA,cmpB]) if(k && !photoUrls[k]){ const b=await photoGet(k); if(b) photoUrls[k]=URL.createObjectURL(b); }
+  if(tab==="progress"){ const y=window.scrollY; render(); window.scrollTo(0,y); }
+}
+
+/* ---- backup file ---- */
+async function backupFile(){
+  const blob = new Blob([JSON.stringify(S)], {type:"application/json"});
+  const name = "cut-coach-backup-"+today()+".json";
+  try{
+    const f = new File([blob], name, {type:"application/json"});
+    if(navigator.canShare && navigator.canShare({files:[f]})){ await navigator.share({files:[f], title:"Cut Coach backup"}); S.lastBackup=Date.now(); save(); return "Choose \"Save to Files\" to keep it."; }
+  }catch(e){ if(e && e.name==="AbortError") return "Backup cancelled."; }
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); a.remove();
+  S.lastBackup=Date.now(); save(); return "Backup file saved to Downloads.";
+}
+function restoreFrom(text){
+  const x=JSON.parse(text); if(!x||!x.settings||!x.days) throw 0;
+  S=Object.assign(DEF(),x); S.settings=Object.assign(DEF().settings,S.settings||{}); save();
+}
 function addWeight(kg, d=today()){
   if(!(kg>30 && kg<300)) return false;
-  S.weights = S.weights.filter(w=>w.d!==d); S.weights.push({d,kg:Math.round(kg*10)/10}); save(); return true;
+  S.weights = S.weights.filter(w=>w.d!==d); S.weights.push({d,kg:Math.round(kg*10)/10}); save(); weeklyAuto(); return true;
 }
 
 document.addEventListener("click", async (ev)=>{
@@ -651,6 +821,28 @@ document.addEventListener("click", async (ev)=>{
     const n=document.getElementById("cf-n").value.trim()||"Other", k=+document.getElementById("cf-k").value||0, p=+document.getElementById("cf-p").value||0;
     if(k<=0){ toast("Enter the calories"); return; } addFood(n,k,p); render();
   }
+  else if(a==="samelast"){
+    const [type,i]=v.split("|"); const e=WORKOUTS[type].ex[+i]; const last=lastLog(e.n); if(!last) return;
+    const d=day(); if(d.wk.type!==type) d.wk={type,sets:{},log:{},done:false}; d.wk.log=d.wk.log||{};
+    d.wk.log[i]={reps:last.reps.slice(0,e.s), load:last.load||""}; saveExLog(e.n,d.wk.log[i]); save();
+    const y=window.scrollY; render(); window.scrollTo(0,y);
+  }
+  else if(a==="yadd"){ const f=yourFoods[+v]; if(f){ addFood(f.n,f.k,f.p); const y=window.scrollY; render(); window.scrollTo(0,y); toast("Added: "+f.n); } }
+  else if(a==="fav"||a==="favq"){
+    const n = a==="fav" ? (yourFoods[+v]||{}).n : FOODS[+v][0]; if(!n) return;
+    if(S.favs.includes(n)) S.favs=S.favs.filter(x=>x!==n); else { S.favs.push(n); const fi=foodInfo(n); if(fi && !S.foodUse[n]) S.foodUse[n]={k:fi.k,p:fi.p,c:0,t:Date.now()}; }
+    save(); const y=window.scrollY; render(); window.scrollTo(0,y);
+  }
+  else if(a==="mydish"){
+    const n=document.getElementById("md-n").value.trim(), k=+document.getElementById("md-k").value, p=+document.getElementById("md-p").value||0;
+    if(!n||!(k>0)){ toast("Enter a name and the calories"); return; }
+    S.myFoods=S.myFoods.filter(f=>f.n!==n); S.myFoods.push({n,k:Math.round(k),p:Math.round(p)}); if(!S.favs.includes(n)) S.favs.push(n); save(); render(); toast("Dish saved");
+  }
+  else if(a==="mydel"){ const f=S.myFoods[+v]; if(f){ S.myFoods.splice(+v,1); S.favs=S.favs.filter(x=>x!==f.n); save(); const y=window.scrollY; render(); window.scrollTo(0,y);} }
+  else if(a==="waistadd"){ const cm=parseFloat(document.getElementById("waist-in").value); if(cm>40&&cm<200){ S.waists=S.waists.filter(w=>w.d!==today()); S.waists.push({d:today(),cm:Math.round(cm*2)/2}); save(); render(); toast("Waist saved"); } else toast("Enter your waist in cm"); }
+  else if(a==="photodel"){ if(cmpB){ await photoDel(cmpB); if(photoUrls[cmpB]){ URL.revokeObjectURL(photoUrls[cmpB]); delete photoUrls[cmpB]; } cmpB=null; refreshPhotos(); } }
+  else if(a==="undoadj"){ const wk=weekStart(); const adj=S.adjust[wk]; if(adj){ S.settings.kcal=adj.from; S.adjust[wk]={undone:true, from:adj.from, to:adj.from}; save(); render(); toast("Calories back to "+adj.from); } }
+  else if(a==="backupfile"){ const m=await backupFile(); toast(m); render(); }
   else if(a==="wadd"){ const w=parseFloat(document.getElementById("w-in").value); if(addWeight(w)){ render(); toast("Weight saved"); } else toast("Enter a weight in kg"); }
   else if(a==="settings"){
     const st=S.settings; st.why=document.getElementById("s-why").value.trim();
@@ -659,7 +851,31 @@ document.addEventListener("click", async (ev)=>{
     save(); render(); toast("Settings saved");
   }
   else if(a==="export"){ try{ await navigator.clipboard.writeText(JSON.stringify(S)); document.getElementById("bk-msg").textContent="Backup copied. Paste it into Notes to keep it."; }catch(e){ document.getElementById("imp").value=JSON.stringify(S); document.getElementById("bk-msg").textContent="Couldn't copy automatically: the backup is in the box above, select and copy it."; } }
-  else if(a==="import"){ try{ const x=JSON.parse(document.getElementById("imp").value); if(!x||!x.settings||!x.days) throw 0; S=Object.assign(DEF(),x); save(); render(); toast("Backup restored"); }catch(e){ document.getElementById("bk-msg").textContent="That doesn't look like a Cut Coach backup."; } }
+  else if(a==="import"){ try{ restoreFrom(document.getElementById("imp").value); render(); toast("Backup restored"); }catch(e){ document.getElementById("bk-msg").textContent="That doesn't look like a Cut Coach backup."; } }
+});
+
+document.addEventListener("change", async (ev)=>{
+  const el = ev.target.closest("[data-in]"); if(!el) return;
+  const k = el.dataset.in, v = el.dataset.v||"";
+  if(k==="rep"||k==="load"){
+    const [type,i,j] = v.split("|"); const e = WORKOUTS[type].ex[+i]; const d = day();
+    if(d.wk.type!==type) d.wk={type,sets:{},log:{},done:false}; d.wk.log=d.wk.log||{};
+    const lg = d.wk.log[i] = d.wk.log[i]||{reps:[],load:""};
+    if(k==="rep"){ const n=Math.max(0,Math.min(300,parseInt(el.value,10)||0)); lg.reps[+j]=n; el.classList.toggle("done",n>0); if(n>0) startRest(type==="QUICK"?20:75); }
+    else lg.load = el.value.trim().slice(0,60);
+    for(let x=0;x<e.s;x++) lg.reps[x]=lg.reps[x]||0;
+    saveExLog(e.n, lg); save();
+  }
+  else if(k==="photo"){
+    const f=el.files&&el.files[0]; if(!f) return;
+    try{ const b=await shrink(f); await photoPut(today(), b); if(photoUrls[today()]){ URL.revokeObjectURL(photoUrls[today()]); delete photoUrls[today()]; } cmpB=today(); toast("Photo saved on this phone"); refreshPhotos(); }
+    catch(e){ toast("Couldn't save that photo"); }
+  }
+  else if(k==="cmp"){ cmpA=document.getElementById("cmp-a").value; cmpB=document.getElementById("cmp-b").value; refreshPhotos(); }
+  else if(k==="restore"){
+    const f=el.files&&el.files[0]; if(!f) return;
+    try{ restoreFrom(await f.text()); render(); toast("Backup restored"); }catch(e){ toast("That file isn't a Cut Coach backup"); }
+  }
 });
 
 function toast(m){
@@ -685,7 +901,9 @@ Write a reply under 80 words: acknowledge the craving in one line, then 2–3 co
 /* ---------------- BOOT ---------------- */
 if(!IN_CLAUDE && "serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").catch(()=>{}); }
 const h0 = (location.hash||"").slice(1); if(["today","workout","sos","food","progress"].includes(h0)) tab=h0;
+weeklyAuto();
 render();
+refreshPhotos();
 
 (async ()=>{
   try{
